@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "Product" ADD COLUMN     "brand" TEXT,
+ADD COLUMN     "featured" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "fullDescription" TEXT,
+ADD COLUMN     "imageUrl" TEXT,
+ADD COLUMN     "internalCost" DECIMAL(10,2),
+ADD COLUMN     "lowStockAlert" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "notes" TEXT,
+ADD COLUMN     "presentation" TEXT,
+ADD COLUMN     "relatedServices" TEXT[],
+ADD COLUMN     "sku" TEXT,
+ADD COLUMN     "status" TEXT NOT NULL DEFAULT 'disponible',
+ADD COLUMN     "stockMin" INTEGER,
+ADD COLUMN     "taxRate" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "unit" TEXT;
