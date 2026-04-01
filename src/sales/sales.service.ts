@@ -20,10 +20,14 @@ import {
   SaleStatusDto,
 } from './dto/create-sale.dto';
 import { UpdateSaleDto } from './dto/update-sale.dto';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class SalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
 
   async listSales() {
     const sales = await this.prisma.sale.findMany({
@@ -250,6 +254,25 @@ export class SalesService {
       return createdSale;
     });
 
+    await this.mailService.sendSaleCreated({
+      email: sale.clientProfile?.user?.email,
+      fullName: sale.clientProfile
+        ? this.fullName(
+            sale.clientProfile.user?.firstName,
+            sale.clientProfile.user?.lastName,
+          )
+        : null,
+      saleId: sale.id,
+      status: sale.status,
+      paymentMethod: sale.paymentMethod,
+      total: sale.total.toString(),
+      items: sale.items.map((item: any) => ({
+        name: item.name,
+        quantity: item.quantity,
+        totalPrice: item.totalPrice.toString(),
+      })),
+    });
+
     return this.mapSale(sale);
   }
 
@@ -293,6 +316,25 @@ export class SalesService {
         items: true,
         createdBy: true,
       },
+    });
+
+    await this.mailService.sendSaleUpdated({
+      email: updatedSale.clientProfile?.user?.email,
+      fullName: updatedSale.clientProfile
+        ? this.fullName(
+            updatedSale.clientProfile.user?.firstName,
+            updatedSale.clientProfile.user?.lastName,
+          )
+        : null,
+      saleId: updatedSale.id,
+      status: updatedSale.status,
+      paymentMethod: updatedSale.paymentMethod,
+      total: updatedSale.total.toString(),
+      items: updatedSale.items.map((item: any) => ({
+        name: item.name,
+        quantity: item.quantity,
+        totalPrice: item.totalPrice.toString(),
+      })),
     });
 
     return this.mapSale(updatedSale);

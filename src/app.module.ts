@@ -15,6 +15,7 @@ import { ClientModule } from './client/client.module';
 import { ClientsModule } from './clients/clients.module';
 import { ReportsModule } from './reports/reports.module';
 import { SalesModule } from './sales/sales.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { SalesModule } from './sales/sales.module';
     ClientsModule,
     ReportsModule,
     SalesModule,
+    MailModule,
     ServicesModule,
     AppointmentsModule,
     ProductsModule,

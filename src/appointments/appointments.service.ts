@@ -20,10 +20,14 @@ import {
   CreateAppointmentDto,
 } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AppointmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
   private readonly bogotaTimeZone = 'America/Bogota';
 
   private async createRandomPasswordHash() {
@@ -164,6 +168,18 @@ export class AppointmentsService {
       },
     });
 
+    await this.mailService.sendAppointmentCreated({
+      email: appointment.clientProfile.user.email,
+      fullName: `${appointment.clientProfile.user.firstName} ${appointment.clientProfile.user.lastName}`.trim(),
+      serviceName: appointment.service.name,
+      date: this.formatBogotaDate(appointment.scheduledAt),
+      time: this.formatBogotaTime(appointment.scheduledAt),
+      professionalName: appointment.assignedStaff
+        ? `${appointment.assignedStaff.user.firstName} ${appointment.assignedStaff.user.lastName}`.trim()
+        : null,
+      notes: appointment.notes,
+    });
+
     return this.mapAppointment(appointment);
   }
 
@@ -292,6 +308,19 @@ export class AppointmentsService {
           },
         },
       },
+    });
+
+    await this.mailService.sendAppointmentUpdated({
+      email: updated.clientProfile.user.email,
+      fullName: `${updated.clientProfile.user.firstName} ${updated.clientProfile.user.lastName}`.trim(),
+      serviceName: updated.service.name,
+      date: this.formatBogotaDate(updated.scheduledAt),
+      time: this.formatBogotaTime(updated.scheduledAt),
+      status: this.mapStatusFromPrisma(updated.status),
+      professionalName: updated.assignedStaff
+        ? `${updated.assignedStaff.user.firstName} ${updated.assignedStaff.user.lastName}`.trim()
+        : null,
+      notes: updated.notes,
     });
 
     return this.mapAppointment(updated);
