@@ -168,8 +168,13 @@ export class AppointmentsService {
       },
     });
 
+    const notificationEmail = this.resolveNotificationEmail(
+      createAppointmentDto.clientEmail,
+      appointment.clientProfile.user.email,
+    );
+
     await this.mailService.sendAppointmentCreated({
-      email: appointment.clientProfile.user.email,
+      email: notificationEmail,
       fullName: `${appointment.clientProfile.user.firstName} ${appointment.clientProfile.user.lastName}`.trim(),
       serviceName: appointment.service.name,
       date: this.formatBogotaDate(appointment.scheduledAt),
@@ -310,8 +315,13 @@ export class AppointmentsService {
       },
     });
 
+    const notificationEmail = this.resolveNotificationEmail(
+      updateAppointmentDto.clientEmail,
+      updated.clientProfile.user.email,
+    );
+
     await this.mailService.sendAppointmentUpdated({
-      email: updated.clientProfile.user.email,
+      email: notificationEmail,
       fullName: `${updated.clientProfile.user.firstName} ${updated.clientProfile.user.lastName}`.trim(),
       serviceName: updated.service.name,
       date: this.formatBogotaDate(updated.scheduledAt),
@@ -362,6 +372,24 @@ export class AppointmentsService {
     }
 
     return scheduledAt;
+  }
+
+  private resolveNotificationEmail(
+    requestedEmail?: string | null,
+    persistedEmail?: string | null,
+  ) {
+    const normalizedRequested = requestedEmail?.trim().toLowerCase();
+    const normalizedPersisted = persistedEmail?.trim().toLowerCase();
+
+    if (
+      normalizedRequested &&
+      !normalizedRequested.endsWith('@clientes.ohmeria.local') &&
+      !normalizedRequested.endsWith('@staff.ohmeria.local')
+    ) {
+      return normalizedRequested;
+    }
+
+    return normalizedPersisted ?? undefined;
   }
 
   private async resolveClientProfileId(createAppointmentDto: CreateAppointmentDto) {
