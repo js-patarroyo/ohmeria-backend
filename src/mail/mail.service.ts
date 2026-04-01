@@ -263,6 +263,9 @@ export class MailService {
 
     try {
       await this.sendTransactionalEmail(input);
+      this.logger.log(
+        `Correo enviado a ${input.to.email} con asunto "${input.subject}".`,
+      );
     } catch (error) {
       this.logger.error(
         `No fue posible enviar correo a ${input.to.email}: ${(error as Error).message}`,
@@ -316,19 +319,31 @@ export class MailService {
 
   private isDeliverableEmail(email?: string | null) {
     if (!email) {
+      this.logger.warn('Correo omitido: el destinatario no tiene email.');
       return false;
     }
 
     const normalized = email.trim().toLowerCase();
 
     if (!normalized || !normalized.includes('@')) {
+      this.logger.warn(
+        `Correo omitido para "${email}": el formato del destinatario no es válido.`,
+      );
       return false;
     }
 
-    return !(
+    const isLocal = 
       normalized.endsWith('@clientes.ohmeria.local') ||
-      normalized.endsWith('@staff.ohmeria.local')
-    );
+      normalized.endsWith('@staff.ohmeria.local');
+
+    if (isLocal) {
+      this.logger.warn(
+        `Correo omitido para ${normalized}: es un correo local/no entregable.`,
+      );
+      return false;
+    }
+
+    return true;
   }
 
   private formatCop(value: string | number) {
