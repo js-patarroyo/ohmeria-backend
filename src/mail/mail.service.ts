@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 type MailRecipient = {
   email: string;
@@ -363,7 +363,9 @@ export class MailService {
         textContent: input.textContent,
         tags: input.tags,
         headers: {
-          idempotencyKey: input.idempotencyKey ?? randomUUID(),
+          idempotencyKey: this.buildBrevoIdempotencyKey(
+            input.idempotencyKey ?? randomUUID(),
+          ),
         },
       }),
     });
@@ -391,6 +393,11 @@ export class MailService {
 
     this.recentDeliveries.set(key, now);
     return true;
+  }
+
+  private buildBrevoIdempotencyKey(source: string) {
+    const digest = createHash('sha256').update(source).digest('hex');
+    return `ohm-${digest.slice(0, 44)}`;
   }
 
   private isDeliverableEmail(email?: string | null) {
