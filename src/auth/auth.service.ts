@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { OAuth2Client } from 'google-auth-library';
 import { compare, hash } from 'bcryptjs';
 import { createHash, randomBytes } from 'crypto';
 import { UsersService } from '../users/users.service';
@@ -17,9 +18,11 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { GoogleAuthDto } from './dto/google-auth.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly googleClient = new OAuth2Client();
   private readonly loginAttempts = new Map<
     string,
     { count: number; firstAttemptAt: number; blockedUntil?: number }
@@ -130,6 +133,78 @@ export class AuthService {
     };
   }
 
+  async googleAuth(googleAuthDto: GoogleAuthDto) {
+    const clientIds = this.getGoogleClientIds();
+
+    if (clientIds.length === 0) {
+      throw new UnauthorizedException(
+        'Google no está configurado para este entorno.',
+      );
+    }
+
+    const ticket = await this.googleClient.verifyIdToken({
+      idToken: googleAuthDto.credential,
+      audience: clientIds,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload?.email || !payload.email_verified) {
+      throw new UnauthorizedException(
+        'No fue posible verificar la cuenta de Google.',
+      );
+    }
+
+    const email = payload.email.trim().toLowerCase();
+    let user = await this.usersService.findByEmail(email);
+
+    if (!user) {
+      const createdUser = await this.usersService.createClientUser({
+        email,
+        passwordHash: await hash(randomBytes(24).toString('hex'), 10),
+        firstName: payload.given_name?.trim() || payload.name?.trim() || 'Cliente',
+        lastName: payload.family_name?.trim() || '',
+        phone: undefined,
+      });
+
+      user = await this.usersService.findByEmail(createdUser.email);
+    }
+
+    if (!user) {
+      throw new UnauthorizedException(
+        'No fue posible completar el acceso con Google.',
+      );
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException(
+        'Tu cuenta no está habilitada para iniciar sesión.',
+      );
+    }
+
+    const jwtPayload = this.buildJwtPayload({
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    });
+
+    return {
+      message: 'Inicio de sesión exitoso.',
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+      },
+      accessToken: await this.jwtService.signAsync(jwtPayload),
+    };
+  }
+
   me(userId: string) {
     return this.usersService.getProfile(userId);
   }
@@ -237,6 +312,15 @@ export class AuthService {
 
   private buildJwtPayload(user: AuthenticatedUser): AuthenticatedUser {
     return user;
+  }
+
+  private getGoogleClientIds() {
+    const singleClientId = this.configService.get<string>('GOOGLE_CLIENT_ID');
+    const multipleClientIds = this.configService.get<string>('GOOGLE_CLIENT_IDS');
+
+    return [singleClientId, ...(multipleClientIds?.split(',') ?? [])]
+      .map((value) => value?.trim())
+      .filter((value): value is string => Boolean(value));
   }
 
   private buildResetPasswordUrl(token: string) {
