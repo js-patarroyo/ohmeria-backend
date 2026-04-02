@@ -397,7 +397,15 @@ export class MailService {
 
   private buildBrevoIdempotencyKey(source: string) {
     const digest = createHash('sha256').update(source).digest('hex');
-    return `ohm-${digest.slice(0, 44)}`;
+    const variant = ['8', '9', 'a', 'b'][parseInt(digest[16], 16) % 4];
+
+    return [
+      digest.slice(0, 8),
+      digest.slice(8, 12),
+      `4${digest.slice(13, 16)}`,
+      `${variant}${digest.slice(17, 20)}`,
+      digest.slice(20, 32),
+    ].join('-');
   }
 
   private isDeliverableEmail(email?: string | null) {
