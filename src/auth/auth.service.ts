@@ -240,9 +240,13 @@ export class AuthService {
   }
 
   private buildResetPasswordUrl(token: string) {
+    const configuredAppUrl = this.configService.get<string>('FRONTEND_APP_URL');
+    const configuredOrigin = this.configService.get<string>('FRONTEND_ORIGIN');
     const frontendAppUrl =
-      this.configService.get<string>('FRONTEND_APP_URL') ??
-      this.configService.get<string>('FRONTEND_ORIGIN') ??
+      configuredAppUrl ||
+      (configuredOrigin?.includes('.vercel.app')
+        ? 'https://app.ohmeria.com'
+        : configuredOrigin) ||
       'https://app.ohmeria.com';
 
     const base = frontendAppUrl.replace(/\/$/, '');
