@@ -4,13 +4,19 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
+import { createHash, randomBytes } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AuthenticatedUser } from './interfaces/authenticated-user.interface';
 import { UserStatus } from '@prisma/client';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -22,13 +28,21 @@ export class AuthService {
     string,
     { count: number; firstAttemptAt: number; blockedUntil?: number }
   >();
+  private readonly forgotPasswordAttempts = new Map<
+    string,
+    { count: number; firstAttemptAt: number; blockedUntil?: number }
+  >();
   private readonly attemptWindowMs = 15 * 60 * 1000;
   private readonly maxAttempts = 5;
   private readonly blockDurationMs = 15 * 60 * 1000;
+  private readonly passwordResetTtlMinutes = 30;
 
   constructor(
+    private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly mailService: MailService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -120,8 +134,123 @@ export class AuthService {
     return this.usersService.getProfile(userId);
   }
 
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const email = forgotPasswordDto.email.trim().toLowerCase();
+    this.ensureAttemptAllowed(this.forgotPasswordAttempts, email);
+
+    const user = await this.usersService.findByEmail(email);
+
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      this.recordFailedAttempt(this.forgotPasswordAttempts, email);
+      return {
+        message:
+          'Si existe una cuenta asociada a este correo, enviaremos un enlace para restablecer la contraseña.',
+      };
+    }
+
+    const rawToken = randomBytes(32).toString('base64url');
+    const tokenHash = this.hashResetToken(rawToken);
+    const expiresAt = new Date(
+      Date.now() + this.passwordResetTtlMinutes * 60 * 1000,
+    );
+
+    await this.prisma.passwordResetToken.deleteMany({
+      where: {
+        userId: user.id,
+        usedAt: null,
+      },
+    });
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    this.clearAttempts(this.forgotPasswordAttempts, email);
+
+    await this.mailService.sendPasswordReset({
+      email: user.email,
+      fullName: `${user.firstName} ${user.lastName}`.trim(),
+      expiresInMinutes: this.passwordResetTtlMinutes,
+      resetUrl: this.buildResetPasswordUrl(rawToken),
+    });
+
+    return {
+      message:
+        'Si existe una cuenta asociada a este correo, enviaremos un enlace para restablecer la contraseña.',
+    };
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const tokenHash = this.hashResetToken(resetPasswordDto.token.trim());
+
+    const storedToken = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (
+      !storedToken ||
+      storedToken.usedAt ||
+      storedToken.expiresAt.getTime() < Date.now() ||
+      storedToken.user.status !== UserStatus.ACTIVE
+    ) {
+      throw new UnauthorizedException(
+        'El enlace de recuperación no es válido o ya expiró.',
+      );
+    }
+
+    const newPasswordHash = await hash(resetPasswordDto.password, 10);
+
+    await this.prisma.$transaction([
+      this.prisma.passwordResetToken.update({
+        where: { id: storedToken.id },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.passwordResetToken.updateMany({
+        where: {
+          userId: storedToken.userId,
+          usedAt: null,
+          id: { not: storedToken.id },
+        },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.user.update({
+        where: { id: storedToken.userId },
+        data: { passwordHash: newPasswordHash },
+      }),
+    ]);
+
+    this.clearAttempts(this.loginAttempts, storedToken.user.email.toLowerCase());
+    this.clearAttempts(
+      this.forgotPasswordAttempts,
+      storedToken.user.email.toLowerCase(),
+    );
+
+    return {
+      message: 'La contraseña fue actualizada correctamente.',
+    };
+  }
+
   private buildJwtPayload(user: AuthenticatedUser): AuthenticatedUser {
     return user;
+  }
+
+  private buildResetPasswordUrl(token: string) {
+    const frontendAppUrl =
+      this.configService.get<string>('FRONTEND_APP_URL') ??
+      this.configService.get<string>('FRONTEND_ORIGIN') ??
+      'https://app.ohmeria.com';
+
+    const base = frontendAppUrl.replace(/\/$/, '');
+    return `${base}/restablecer-contrasena?token=${encodeURIComponent(token)}`;
+  }
+
+  private hashResetToken(token: string) {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private ensureAttemptAllowed(

@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomUUID } from 'crypto';
 
 type MailRecipient = {
   email: string;
@@ -303,6 +302,50 @@ export class MailService {
     });
   }
 
+  async sendPasswordReset(input: {
+    email?: string | null;
+    fullName?: string | null;
+    resetUrl: string;
+    expiresInMinutes: number;
+  }) {
+    if (!this.isDeliverableEmail(input.email)) {
+      return;
+    }
+
+    await this.safeSend({
+      to: {
+        email: input.email!,
+        name: input.fullName ?? undefined,
+      },
+      subject: 'Restablece tu contraseña de Ohmeria',
+      textContent: [
+        `Hola${input.fullName ? ` ${input.fullName}` : ''},`,
+        '',
+        'Recibimos una solicitud para restablecer la contraseña de tu cuenta en Ohmeria.',
+        `Este enlace estará disponible durante ${input.expiresInMinutes} minutos:`,
+        input.resetUrl,
+        '',
+        'Si no solicitaste este cambio, puedes ignorar este mensaje con tranquilidad.',
+      ].join('\n'),
+      htmlContent: this.wrapHtml({
+        eyebrow: 'Seguridad de la cuenta',
+        title: 'Restablece tu contraseña',
+        recipientName: input.fullName,
+        intro:
+          'Recibimos una solicitud para restablecer la contraseña de tu cuenta en Ohmeria. Usa el siguiente enlace seguro para continuar.',
+        highlights: [
+          { label: 'Validez', value: `${input.expiresInMinutes} minutos` },
+          { label: 'Cuenta', value: input.email! },
+        ],
+        detailHtml: `<p><a href="${this.escapeHtml(input.resetUrl)}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#1d1b19;color:#ffffff;text-decoration:none;font-weight:600;">Restablecer contraseña</a></p><p style="margin-top:16px;">Si el botón no abre, copia este enlace en tu navegador:</p><p style="word-break:break-all;">${this.escapeHtml(input.resetUrl)}</p>`,
+        closing:
+          'Si no solicitaste este cambio, puedes ignorar este mensaje con tranquilidad.',
+      }),
+      tags: ['auth', 'password-reset'],
+      throttleKey: `password-reset-${input.email}`,
+    });
+  }
+
   private async safeSend(input: SendMailInput) {
     if (!this.isConfigured()) {
       this.logger.warn(
@@ -362,11 +405,6 @@ export class MailService {
         htmlContent: input.htmlContent,
         textContent: input.textContent,
         tags: input.tags,
-        headers: {
-          idempotencyKey: this.buildBrevoIdempotencyKey(
-            input.idempotencyKey ?? randomUUID(),
-          ),
-        },
       }),
     });
 
@@ -393,19 +431,6 @@ export class MailService {
 
     this.recentDeliveries.set(key, now);
     return true;
-  }
-
-  private buildBrevoIdempotencyKey(source: string) {
-    const digest = createHash('sha256').update(source).digest('hex');
-    const variant = ['8', '9', 'a', 'b'][parseInt(digest[16], 16) % 4];
-
-    return [
-      digest.slice(0, 8),
-      digest.slice(8, 12),
-      `4${digest.slice(13, 16)}`,
-      `${variant}${digest.slice(17, 20)}`,
-      digest.slice(20, 32),
-    ].join('-');
   }
 
   private isDeliverableEmail(email?: string | null) {

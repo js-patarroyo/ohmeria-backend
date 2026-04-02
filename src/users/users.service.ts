@@ -19,6 +19,13 @@ export class UsersService {
     });
   }
 
+  updatePasswordHash(userId: string, passwordHash: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+  }
+
   async createClientUser(params: {
     email: string;
     passwordHash: string;
