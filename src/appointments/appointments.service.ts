@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import {
   AppointmentCategoryDto,
+  AppointmentOverrideSourceDto,
   AppointmentPaymentStatusDto,
   AppointmentStatusDto,
   CreateAppointmentDto,
@@ -29,6 +30,13 @@ export class AppointmentsService {
     private readonly mailService: MailService,
   ) {}
   private readonly bogotaTimeZone = 'America/Bogota';
+  private readonly nonBlockingStatuses = new Set<AppointmentStatus>([
+    AppointmentStatus.CANCELLED,
+    AppointmentStatus.COMPLETED,
+    AppointmentStatus.NO_SHOW,
+    AppointmentStatus.FOLLOW_UP_COMPLETED,
+    AppointmentStatus.RESCHEDULED,
+  ]);
 
   private async createRandomPasswordHash() {
     return hash(randomBytes(24).toString('hex'), 10);
@@ -127,6 +135,23 @@ export class AppointmentsService {
     const clientProfileId = await this.resolveClientProfileId(createAppointmentDto);
     const serviceId = await this.resolveServiceId(createAppointmentDto);
     const assignedStaffId = await this.resolveAssignedStaffId(createAppointmentDto);
+    const cabin = this.normalizeCabin(createAppointmentDto.cabin);
+
+    const conflicts = await this.findSchedulingConflicts({
+      scheduledAt,
+      durationMinutes: createAppointmentDto.durationMinutes,
+      clientProfileId,
+      assignedStaffId,
+      cabin,
+    });
+
+    this.assertOverrideAllowed({
+      user,
+      allowConflictOverride: createAppointmentDto.allowConflictOverride,
+      overrideReason: createAppointmentDto.overrideReason,
+      overrideSource: createAppointmentDto.overrideSource,
+      conflicts,
+    });
 
     const appointment = await this.prisma.appointment.create({
       data: {
@@ -136,6 +161,7 @@ export class AppointmentsService {
         createdById: user.sub,
         scheduledAt,
         durationMinutes: createAppointmentDto.durationMinutes,
+        cabin,
         status: this.mapStatusToPrisma(createAppointmentDto.status),
         paymentStatus: this.mapPaymentStatusToPrisma(
           createAppointmentDto.paymentStatus,
@@ -166,6 +192,15 @@ export class AppointmentsService {
           },
         },
       },
+    });
+
+    await this.logConflictOverrideIfNeeded({
+      appointmentId: appointment.id,
+      actorUserId: user.sub,
+      reason: createAppointmentDto.overrideReason,
+      source: createAppointmentDto.overrideSource,
+      conflicts,
+      allowConflictOverride: createAppointmentDto.allowConflictOverride,
     });
 
     const notificationEmail = this.resolveNotificationEmail(
@@ -263,6 +298,28 @@ export class AppointmentsService {
     const assignedStaffId = updateAppointmentDto.professionalName
       ? await this.resolveAssignedStaffReference(updateAppointmentDto.professionalName)
       : existing.assignedStaffId;
+    const nextScheduledAt = this.buildScheduledAt(nextDate, nextTime);
+    const nextCabin =
+      updateAppointmentDto.cabin !== undefined
+        ? this.normalizeCabin(updateAppointmentDto.cabin)
+        : existing.cabin;
+
+    const conflicts = await this.findSchedulingConflicts({
+      scheduledAt: nextScheduledAt,
+      durationMinutes: nextDuration,
+      clientProfileId: existing.clientProfileId,
+      assignedStaffId,
+      cabin: nextCabin ?? null,
+      excludeAppointmentId: existing.id,
+    });
+
+    this.assertOverrideAllowed({
+      user,
+      allowConflictOverride: updateAppointmentDto.allowConflictOverride,
+      overrideReason: updateAppointmentDto.overrideReason,
+      overrideSource: updateAppointmentDto.overrideSource,
+      conflicts,
+    });
 
     await this.prisma.user.update({
       where: { id: existing.clientProfile.user.id },
@@ -283,8 +340,9 @@ export class AppointmentsService {
       data: {
         serviceId,
         assignedStaffId,
-        scheduledAt: this.buildScheduledAt(nextDate, nextTime),
+        scheduledAt: nextScheduledAt,
         durationMinutes: nextDuration,
+        cabin: nextCabin,
         status: nextStatus,
         paymentStatus: nextPaymentStatus,
         notes: updateAppointmentDto.notes ?? existing.notes,
@@ -313,6 +371,15 @@ export class AppointmentsService {
           },
         },
       },
+    });
+
+    await this.logConflictOverrideIfNeeded({
+      appointmentId: updated.id,
+      actorUserId: user.sub,
+      reason: updateAppointmentDto.overrideReason,
+      source: updateAppointmentDto.overrideSource,
+      conflicts,
+      allowConflictOverride: updateAppointmentDto.allowConflictOverride,
     });
 
     const notificationEmail = this.resolveNotificationEmail(
@@ -372,6 +439,177 @@ export class AppointmentsService {
     }
 
     return scheduledAt;
+  }
+
+  private normalizeCabin(cabin?: string | null) {
+    const normalized = cabin?.trim();
+    return normalized ? normalized : null;
+  }
+
+  private getAppointmentEndAt(scheduledAt: Date, durationMinutes: number) {
+    const endAt = new Date(scheduledAt);
+    endAt.setMinutes(endAt.getMinutes() + durationMinutes);
+    return endAt;
+  }
+
+  private overlaps(
+    leftStart: Date,
+    leftDurationMinutes: number,
+    rightStart: Date,
+    rightDurationMinutes: number,
+  ) {
+    const leftEnd = this.getAppointmentEndAt(leftStart, leftDurationMinutes);
+    const rightEnd = this.getAppointmentEndAt(rightStart, rightDurationMinutes);
+
+    return leftStart < rightEnd && rightStart < leftEnd;
+  }
+
+  private async findSchedulingConflicts(input: {
+    scheduledAt: Date;
+    durationMinutes: number;
+    clientProfileId: string;
+    assignedStaffId?: string | null;
+    cabin?: string | null;
+    excludeAppointmentId?: string;
+  }) {
+    const startOfDay = new Date(input.scheduledAt);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date(input.scheduledAt);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const candidates = await this.prisma.appointment.findMany({
+      where: {
+        id: input.excludeAppointmentId
+          ? { not: input.excludeAppointmentId }
+          : undefined,
+        scheduledAt: {
+          gte: startOfDay,
+          lte: endOfDay,
+        },
+      },
+      select: {
+        id: true,
+        clientProfileId: true,
+        assignedStaffId: true,
+        cabin: true,
+        scheduledAt: true,
+        durationMinutes: true,
+        status: true,
+      },
+    });
+
+    return candidates
+      .filter((appointment) => !this.nonBlockingStatuses.has(appointment.status))
+      .filter((appointment) =>
+        this.overlaps(
+          input.scheduledAt,
+          input.durationMinutes,
+          appointment.scheduledAt,
+          appointment.durationMinutes,
+        ),
+      )
+      .map((appointment) => {
+        const conflictTypes: string[] = [];
+
+        if (appointment.clientProfileId === input.clientProfileId) {
+          conflictTypes.push('client');
+        }
+
+        if (
+          input.assignedStaffId &&
+          appointment.assignedStaffId &&
+          appointment.assignedStaffId === input.assignedStaffId
+        ) {
+          conflictTypes.push('staff');
+        }
+
+        if (
+          input.cabin &&
+          appointment.cabin &&
+          appointment.cabin.toLowerCase() === input.cabin.toLowerCase()
+        ) {
+          conflictTypes.push('cabin');
+        }
+
+        return {
+          id: appointment.id,
+          conflictTypes,
+        };
+      })
+      .filter((appointment) => appointment.conflictTypes.length > 0);
+  }
+
+  private assertOverrideAllowed(input: {
+    user: AuthenticatedUser;
+    allowConflictOverride?: boolean;
+    overrideReason?: string;
+    overrideSource?: AppointmentOverrideSourceDto;
+    conflicts: Array<{ id: string; conflictTypes: string[] }>;
+  }) {
+    if (input.conflicts.length === 0) {
+      return;
+    }
+
+    const labels = Array.from(
+      new Set(
+        input.conflicts.flatMap((conflict) => conflict.conflictTypes).map((type) => {
+          if (type === 'client') return 'cliente';
+          if (type === 'staff') return 'profesional';
+          return 'cabina';
+        }),
+      ),
+    );
+
+    if (!input.allowConflictOverride) {
+      throw new BadRequestException(
+        `Ya existe una ocupación en ese horario para ${labels.join(', ')}. Solo administración desde caja puede forzar este cruce y quedará auditado.`,
+      );
+    }
+
+    if (input.user.role !== Role.ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador puede forzar cruces de agenda.',
+      );
+    }
+
+    if (input.overrideSource !== AppointmentOverrideSourceDto.ADMIN_CAJA) {
+      throw new BadRequestException(
+        'Los cruces intencionales solo se permiten desde caja administrativa.',
+      );
+    }
+
+    if (!input.overrideReason?.trim()) {
+      throw new BadRequestException(
+        'Debes registrar el motivo del cruce intencional para dejar trazabilidad.',
+      );
+    }
+  }
+
+  private async logConflictOverrideIfNeeded(input: {
+    appointmentId: string;
+    actorUserId: string;
+    reason?: string;
+    source?: AppointmentOverrideSourceDto;
+    conflicts: Array<{ id: string; conflictTypes: string[] }>;
+    allowConflictOverride?: boolean;
+  }) {
+    if (!input.allowConflictOverride || input.conflicts.length === 0) {
+      return;
+    }
+
+    await this.prisma.appointmentConflictOverride.create({
+      data: {
+        appointmentId: input.appointmentId,
+        actorUserId: input.actorUserId,
+        source: input.source ?? AppointmentOverrideSourceDto.ADMIN_CAJA,
+        reason: input.reason?.trim() ?? 'Cruce intencional autorizado.',
+        conflictTypes: Array.from(
+          new Set(input.conflicts.flatMap((conflict) => conflict.conflictTypes)),
+        ),
+        conflictingAppointmentIds: input.conflicts.map((conflict) => conflict.id),
+      },
+    });
   }
 
   private resolveNotificationEmail(
@@ -638,6 +876,7 @@ export class AppointmentsService {
       id: string;
       scheduledAt: Date;
       durationMinutes: number;
+      cabin: string | null;
       status: AppointmentStatus;
       paymentStatus: PaymentStatus;
       notes: string | null;
@@ -673,6 +912,7 @@ export class AppointmentsService {
         : appointment.clientProfile.user.email,
       service: appointment.service.name,
       category: this.mapCategoryFromPrisma(appointment.service.category),
+      cabin: appointment.cabin ?? '',
       professional: appointment.assignedStaff
         ? `${appointment.assignedStaff.user.firstName} ${appointment.assignedStaff.user.lastName}`.trim()
         : 'Sin asignar',

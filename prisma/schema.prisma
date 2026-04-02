@@ -85,6 +85,7 @@ model User {
   staffProfile     StaffProfile?
   clientProfile    ClientProfile?
   createdAppointments Appointment[] @relation("AppointmentCreatedBy")
+  appointmentConflictOverrides AppointmentConflictOverride[] @relation("AppointmentConflictOverrideActor")
   salesCreated     Sale[]          @relation("SaleCreatedBy")
 }
 
@@ -156,6 +157,7 @@ model Appointment {
   createdById       String?
   scheduledAt       DateTime
   durationMinutes   Int
+  cabin             String?
   status            AppointmentStatus    @default(REQUEST_RECEIVED)
   paymentStatus     PaymentStatus        @default(PENDING)
   notes             String?
@@ -167,6 +169,7 @@ model Appointment {
   assignedStaff     StaffProfile?        @relation("AppointmentAssignedTo", fields: [assignedStaffId], references: [id], onDelete: SetNull)
   createdBy         User?                @relation("AppointmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   statusHistory     AppointmentStatusLog[]
+  conflictOverrides AppointmentConflictOverride[]
 }
 
 model AppointmentStatusLog {
@@ -177,6 +180,19 @@ model AppointmentStatusLog {
   note           String?
   createdAt      DateTime           @default(now())
   appointment    Appointment        @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+}
+
+model AppointmentConflictOverride {
+  id                     String       @id @default(cuid())
+  appointmentId          String
+  actorUserId            String
+  source                 String
+  reason                 String
+  conflictTypes          String[]
+  conflictingAppointmentIds String[]
+  createdAt              DateTime     @default(now())
+  appointment            Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actorUser              User         @relation("AppointmentConflictOverrideActor", fields: [actorUserId], references: [id], onDelete: Cascade)
 }
 
 model Product {

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsInt,
@@ -10,6 +11,7 @@ import {
 } from 'class-validator';
 import {
   AppointmentCategoryDto,
+  AppointmentOverrideSourceDto,
   AppointmentPaymentStatusDto,
   AppointmentStatusDto,
 } from './create-appointment.dto';
@@ -59,6 +61,11 @@ export class UpdateAppointmentDto {
   durationMinutes?: number;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  cabin?: string;
+
+  @IsOptional()
   @IsEnum(AppointmentStatusDto)
   status?: AppointmentStatusDto;
 
@@ -79,4 +86,17 @@ export class UpdateAppointmentDto {
   @IsString()
   @MaxLength(500)
   internalNotes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  allowConflictOverride?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  overrideReason?: string;
+
+  @IsOptional()
+  @IsEnum(AppointmentOverrideSourceDto)
+  overrideSource?: AppointmentOverrideSourceDto;
 }

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsInt,
@@ -32,6 +33,10 @@ export enum AppointmentPaymentStatusDto {
   PENDING = 'pendiente',
   PARTIAL = 'anticipo',
   PAID = 'completo',
+}
+
+export enum AppointmentOverrideSourceDto {
+  ADMIN_CAJA = 'admin_caja',
 }
 
 export class CreateAppointmentDto {
@@ -70,6 +75,10 @@ export class CreateAppointmentDto {
   @Min(15)
   durationMinutes!: number;
 
+  @IsString()
+  @MaxLength(80)
+  cabin!: string;
+
   @IsEnum(AppointmentStatusDto)
   status!: AppointmentStatusDto;
 
@@ -89,4 +98,17 @@ export class CreateAppointmentDto {
   @IsString()
   @MaxLength(500)
   internalNotes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  allowConflictOverride?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  overrideReason?: string;
+
+  @IsOptional()
+  @IsEnum(AppointmentOverrideSourceDto)
+  overrideSource?: AppointmentOverrideSourceDto;
 }
