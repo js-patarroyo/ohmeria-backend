@@ -363,7 +363,7 @@ export class MailService {
         textContent: input.textContent,
         tags: input.tags,
         headers: {
-          idempotencyKey: this.buildBrevoIdempotencyKey(
+          'Idempotency-Key': this.buildBrevoIdempotencyKey(
             input.idempotencyKey ?? randomUUID(),
           ),
         },
